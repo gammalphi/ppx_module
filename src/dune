@@ -1,0 +1,13 @@
+(library
+ (name ppx_module)
+ (public_name ppx_module)
+ (modules ppx_module))
+
+(library
+ (name ppx_module_ppx)
+ (public_name ppx_module.ppx)
+ (kind ppx_rewriter)
+ (modules ppx)
+ (libraries ppxlib)
+ (preprocess
+  (pps ppxlib.metaquot)))
