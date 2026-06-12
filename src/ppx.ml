@@ -3,6 +3,11 @@ open Ast_builder.Default
 
 let attr_name = "ppx_module"
 
+let unknown_field_error ~loc field =
+  Location.raise_errorf ~loc
+    "unknown [@@ppx_module] field %S; supported fields are: name, cluster, parents"
+    field
+
 type annotation = {
   name: string option;
   cluster: string option;
@@ -18,44 +23,37 @@ let expr_bool = function
   | {pexp_desc= Pexp_construct ({txt= Lident "false"; _}, None); _} -> Some false
   | _ -> None
 
-let parse_record_payload ~loc fields =
+let parse_record_payload fields =
   let name = ref None in
   let cluster = ref None in
   let parents = ref true in
-  let set field value =
-    match field with
-    | "name" -> name := Some value
-    | "cluster" -> cluster := Some value
-    | field ->
-        Location.raise_errorf ~loc
-          "unknown [@@ppx_module] field %S; supported fields are: name, cluster, parents"
-          field
+  let field_name {txt; loc} =
+    match txt with
+    | Lident field -> field
+    | _ -> Location.raise_errorf ~loc "[@@ppx_module] fields must be unqualified"
   in
-  List.iter
-    (fun ({txt= lid; loc}, expr) ->
-      let field =
-        match lid with
-        | Lident field -> field
-        | _ ->
-            Location.raise_errorf ~loc
-              "[@@ppx_module] fields must be unqualified"
-      in
-      match field, expr_string expr, expr_bool expr with
-      | ("name" | "cluster"), Some value, _ -> set field value
-      | "parents", _, Some value -> parents := value
-      | "parents", _, None ->
-          Location.raise_errorf ~loc
-            "[@@ppx_module] field %S must be a boolean literal"
-            field
-      | ("name" | "cluster"), None, _ ->
-          Location.raise_errorf ~loc
-            "[@@ppx_module] field %S must be a string literal"
-            field
-      | _ ->
-          Location.raise_errorf ~loc
-            "unknown [@@ppx_module] field %S; supported fields are: name, cluster, parents"
-            field)
-    fields;
+  let parse_string_field ~loc field expr =
+    match expr_string expr with
+    | Some value -> value
+    | None ->
+        Location.raise_errorf ~loc
+          "[@@ppx_module] field %S must be a string literal" field
+  in
+  let parse_bool_field ~loc field expr =
+    match expr_bool expr with
+    | Some value -> value
+    | None ->
+        Location.raise_errorf ~loc
+          "[@@ppx_module] field %S must be a boolean literal" field
+  in
+  let parse_field ({loc; _} as lid, expr) =
+    match field_name lid with
+    | "name" -> name := Some (parse_string_field ~loc "name" expr)
+    | "cluster" -> cluster := Some (parse_string_field ~loc "cluster" expr)
+    | "parents" -> parents := parse_bool_field ~loc "parents" expr
+    | field -> unknown_field_error ~loc field
+  in
+  List.iter parse_field fields;
   {name= !name; cluster= !cluster; parents= !parents}
 
 let parse_annotation attr =
@@ -64,9 +62,9 @@ let parse_annotation attr =
   | PStr
       [{pstr_desc=
           Pstr_eval
-            ({pexp_desc= Pexp_record (fields, None); pexp_loc= loc; _}, _);
+            ({pexp_desc= Pexp_record (fields, None); _}, _);
         _}] ->
-      parse_record_payload ~loc fields
+      parse_record_payload fields
   | _ ->
       Location.raise_errorf
         ~loc:attr.attr_loc
@@ -136,19 +134,29 @@ let option_string_expr ~loc = function
   | None -> [%expr None]
   | Some s -> [%expr Some [%e estring ~loc s]]
 
-let edge_expr ~loc kind param =
+let module_value_expr ~loc module_name value_name =
+  pexp_ident ~loc {txt= Ldot (Lident module_name, value_name); loc}
+
+type dependency_kind = Parent_dependency | Context_dependency
+
+let dependency_kind_expr ~loc = function
+  | Parent_dependency -> [%expr Ppx_module.Parent]
+  | Context_dependency -> [%expr Ppx_module.Context]
+
+let dependency_expr ~loc kind param =
   let label = estring ~loc param in
-  let kind = pexp_construct ~loc {txt= Ldot (Lident "Ppx_module", kind); loc} None in
-  let node = pexp_ident ~loc {txt= Ldot (Lident param, "ppx_module_node"); loc} in
+  let kind = dependency_kind_expr ~loc kind in
+  let node = module_value_expr ~loc param "ppx_module_node" in
   [%expr [%e label], [%e kind], [%e node]]
+
+let dependency_exprs ~loc ~parents ~context =
+  List.map (dependency_expr ~loc Parent_dependency) parents
+  @ List.map (dependency_expr ~loc Context_dependency) context
+  |> elist ~loc
 
 let gen_bindings meta ~parent_params =
   let loc = meta.loc in
-  let parents =
-    List.map (edge_expr ~loc "Parent") parent_params
-    @ List.map (edge_expr ~loc "Context") meta.context
-    |> elist ~loc
-  in
+  let parents = dependency_exprs ~loc ~parents:parent_params ~context:meta.context in
   [
     [%stri let ppx_module_name = lazy [%e estring ~loc meta.name]];
     [%stri
@@ -164,6 +172,10 @@ let gen_bindings meta ~parent_params =
           ~parents:[%e parents]];
   ]
 
+let add_generated_bindings meta params_acc items =
+  let parent_params = if meta.parents then params_acc else [] in
+  items @ gen_bindings meta ~parent_params
+
 let inject_into_body meta expr =
   let rec go params_acc e =
     match e.pmod_desc with
@@ -176,8 +188,7 @@ let inject_into_body meta expr =
     | Pmod_constraint (me, mt) ->
         {e with pmod_desc= Pmod_constraint (go params_acc me, mt)}
     | Pmod_structure items ->
-        let parent_params = if meta.parents then params_acc else [] in
-        {e with pmod_desc= Pmod_structure (items @ gen_bindings meta ~parent_params)}
+        {e with pmod_desc= Pmod_structure (add_generated_bindings meta params_acc items)}
     | _ -> e
   in
   go [] expr
@@ -188,25 +199,30 @@ let mapper =
     val mutable context_params : string list = []
     val mutable lexical_stack : string list = []
 
+    method private map_nested_modules meta mb =
+      let saved_context = context_params in
+      let saved_lexical = lexical_stack in
+      context_params <- saved_context @ meta.functor_params;
+      lexical_stack <- meta.lexical_path;
+      Fun.protect
+        (fun () -> super#module_binding mb)
+        ~finally:(fun () ->
+          context_params <- saved_context;
+          lexical_stack <- saved_lexical)
+
     method private rewrite_module_binding item mb =
       match annotation mb with
       | None -> super#module_binding mb
       | Some annotation ->
-          let saved_context = context_params in
-          let saved_lexical = lexical_stack in
           let meta =
             module_metadata
               ~annotation
-              ~context:saved_context
-              ~lexical_stack:saved_lexical
+              ~context:context_params
+              ~lexical_stack
               item
               mb
           in
-          context_params <- saved_context @ meta.functor_params;
-          lexical_stack <- meta.lexical_path;
-          let mb = super#module_binding mb in
-          context_params <- saved_context;
-          lexical_stack <- saved_lexical;
+          let mb = self#map_nested_modules meta mb in
           let pmb_expr = inject_into_body meta mb.pmb_expr in
           let pmb_attributes = without_attr mb.pmb_attributes in
           {mb with pmb_expr; pmb_attributes}
