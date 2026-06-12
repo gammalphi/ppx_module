@@ -183,39 +183,40 @@ let inject_into_body meta expr =
   go [] expr
 
 let mapper =
-  object
+  object (self)
     inherit Ast_traverse.map as super
     val mutable context_params : string list = []
     val mutable lexical_stack : string list = []
 
+    method private rewrite_module_binding item mb =
+      match annotation mb with
+      | None -> super#module_binding mb
+      | Some annotation ->
+          let saved_context = context_params in
+          let saved_lexical = lexical_stack in
+          let meta =
+            module_metadata
+              ~annotation
+              ~context:saved_context
+              ~lexical_stack:saved_lexical
+              item
+              mb
+          in
+          context_params <- saved_context @ meta.functor_params;
+          lexical_stack <- meta.lexical_path;
+          let mb = super#module_binding mb in
+          context_params <- saved_context;
+          lexical_stack <- saved_lexical;
+          let pmb_expr = inject_into_body meta mb.pmb_expr in
+          let pmb_attributes = without_attr mb.pmb_attributes in
+          {mb with pmb_expr; pmb_attributes}
+
     method! structure_item item =
       match item.pstr_desc with
       | Pstr_module mb ->
-          begin match annotation mb with
-          | None -> super#structure_item item
-          | Some annotation ->
-              let saved_context = context_params in
-              let saved_lexical = lexical_stack in
-              let meta =
-                module_metadata
-                  ~annotation
-                  ~context:saved_context
-                  ~lexical_stack:saved_lexical
-                  item
-                  mb
-              in
-              context_params <- saved_context @ meta.functor_params;
-              lexical_stack <- meta.lexical_path;
-              let item = super#structure_item item in
-              context_params <- saved_context;
-              lexical_stack <- saved_lexical;
-              match item.pstr_desc with
-              | Pstr_module mb ->
-                  let pmb_expr = inject_into_body meta mb.pmb_expr in
-                  let pmb_attributes = without_attr mb.pmb_attributes in
-                  {item with pstr_desc= Pstr_module {mb with pmb_expr; pmb_attributes}}
-              | _ -> item
-          end
+          {item with pstr_desc= Pstr_module (self#rewrite_module_binding item mb)}
+      | Pstr_recmodule mbs ->
+          {item with pstr_desc= Pstr_recmodule (List.map (self#rewrite_module_binding item) mbs)}
       | _ -> super#structure_item item
   end
 

@@ -1,0 +1,5 @@
+(executable
+ (name recursive_modules)
+ (libraries ppx_module)
+ (preprocess
+  (pps ppx_module.ppx)))
