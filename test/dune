@@ -1,5 +1,12 @@
-(executable
- (name recursive_modules)
+(executables
+ (names recursive_modules metadata)
  (libraries ppx_module)
  (preprocess
   (pps ppx_module.ppx)))
+
+(rule
+ (alias runtest)
+ (action
+  (progn
+   (run ./recursive_modules.exe)
+   (run ./metadata.exe))))
