@@ -5,32 +5,36 @@ let attr_name = "ppx_module"
 
 let unknown_field_error ~loc field =
   Location.raise_errorf ~loc
-    "unknown [@@ppx_module] field %S; supported fields are: name, cluster, parents"
+    "unknown [@@ppx_module] field %S; supported fields are: name, cluster, \
+     parents"
     field
 
 type annotation = {
-  name: string option;
-  cluster: string option;
-  parents: bool;
+  name : string option;
+  cluster : string option;
+  parents : bool;
 }
 
 let expr_string = function
-  | {pexp_desc= Pexp_constant (Pconst_string (s, _, _)); _} -> Some s
+  | { pexp_desc = Pexp_constant (Pconst_string (s, _, _)); _ } -> Some s
   | _ -> None
 
 let expr_bool = function
-  | {pexp_desc= Pexp_construct ({txt= Lident "true"; _}, None); _} -> Some true
-  | {pexp_desc= Pexp_construct ({txt= Lident "false"; _}, None); _} -> Some false
+  | { pexp_desc = Pexp_construct ({ txt = Lident "true"; _ }, None); _ } ->
+      Some true
+  | { pexp_desc = Pexp_construct ({ txt = Lident "false"; _ }, None); _ } ->
+      Some false
   | _ -> None
 
 let parse_record_payload fields =
   let name = ref None in
   let cluster = ref None in
   let parents = ref true in
-  let field_name {txt; loc} =
+  let field_name { txt; loc } =
     match txt with
     | Lident field -> field
-    | _ -> Location.raise_errorf ~loc "[@@ppx_module] fields must be unqualified"
+    | _ ->
+        Location.raise_errorf ~loc "[@@ppx_module] fields must be unqualified"
   in
   let parse_string_field ~loc field expr =
     match expr_string expr with
@@ -46,7 +50,7 @@ let parse_record_payload fields =
         Location.raise_errorf ~loc
           "[@@ppx_module] field %S must be a boolean literal" field
   in
-  let parse_field ({loc; _} as lid, expr) =
+  let parse_field (({ loc; _ } as lid), expr) =
     match field_name lid with
     | "name" -> name := Some (parse_string_field ~loc "name" expr)
     | "cluster" -> cluster := Some (parse_string_field ~loc "cluster" expr)
@@ -54,23 +58,25 @@ let parse_record_payload fields =
     | field -> unknown_field_error ~loc field
   in
   List.iter parse_field fields;
-  {name= !name; cluster= !cluster; parents= !parents}
+  { name = !name; cluster = !cluster; parents = !parents }
 
 let parse_annotation attr =
   match attr.attr_payload with
-  | PStr [] -> {name= None; cluster= None; parents= true}
+  | PStr [] -> { name = None; cluster = None; parents = true }
   | PStr
-      [{pstr_desc=
-          Pstr_eval
-            ({pexp_desc= Pexp_record (fields, None); _}, _);
-        _}] ->
+      [
+        {
+          pstr_desc =
+            Pstr_eval ({ pexp_desc = Pexp_record (fields, None); _ }, _);
+          _;
+        };
+      ] ->
       parse_record_payload fields
   | _ ->
-      Location.raise_errorf
-        ~loc:attr.attr_loc
+      Location.raise_errorf ~loc:attr.attr_loc
         "[@@ppx_module] expects no payload or a record payload, e.g. \
-         [@@ppx_module] or \
-         [@@ppx_module { name = \"Memory.Domain\"; cluster = \"memory\" }]"
+         [@@ppx_module] or [@@ppx_module { name = \"Memory.Domain\"; cluster = \
+         \"memory\" }]"
 
 let annotation mb =
   mb.pmb_attributes
@@ -83,8 +89,9 @@ let without_attr attrs =
 let collect_functor_params expr =
   let rec go acc e =
     match e.pmod_desc with
-    | Pmod_functor (Named ({txt= Some n; _}, _), body) -> go (acc @ [n]) body
-    | Pmod_functor (Named ({txt= None; _}, _), body) -> go acc body
+    | Pmod_functor (Named ({ txt = Some n; _ }, _), body) ->
+        go (acc @ [ n ]) body
+    | Pmod_functor (Named ({ txt = None; _ }, _), body) -> go acc body
     | Pmod_functor (Unit, body) -> go acc body
     | Pmod_constraint (me, _) -> go acc me
     | _ -> acc
@@ -92,22 +99,20 @@ let collect_functor_params expr =
   go [] expr
 
 type metadata = {
-  loc: Location.t;
-  source_file: string;
-  source_line: int;
-  source_item_name: string;
-  name: string;
-  cluster: string option;
-  parents: bool;
-  lexical_path: string list;
-  context: string list;
-  functor_params: string list;
+  loc : Location.t;
+  source_file : string;
+  source_line : int;
+  source_item_name : string;
+  name : string;
+  cluster : string option;
+  parents : bool;
+  lexical_path : string list;
+  context : string list;
+  functor_params : string list;
 }
 
 let default_name source_file =
-  source_file
-  |> Filename.basename
-  |> Filename.remove_extension
+  source_file |> Filename.basename |> Filename.remove_extension
   |> String.capitalize_ascii
 
 let module_metadata ~(annotation : annotation) ~context ~lexical_stack item mb =
@@ -118,14 +123,14 @@ let module_metadata ~(annotation : annotation) ~context ~lexical_stack item mb =
   {
     loc;
     source_file;
-    source_line= loc.loc_start.pos_lnum;
+    source_line = loc.loc_start.pos_lnum;
     source_item_name;
     name;
-    cluster= annotation.cluster;
-    parents= annotation.parents;
-    lexical_path= lexical_stack @ [name];
+    cluster = annotation.cluster;
+    parents = annotation.parents;
+    lexical_path = lexical_stack @ [ name ];
     context;
-    functor_params= collect_functor_params mb.pmb_expr;
+    functor_params = collect_functor_params mb.pmb_expr;
   }
 
 let string_list_expr ~loc xs = xs |> List.map (estring ~loc) |> elist ~loc
@@ -135,7 +140,7 @@ let option_string_expr ~loc = function
   | Some s -> [%expr Some [%e estring ~loc s]]
 
 let module_value_expr ~loc module_name value_name =
-  pexp_ident ~loc {txt= Ldot (Lident module_name, value_name); loc}
+  pexp_ident ~loc { txt = Ldot (Lident module_name, value_name); loc }
 
 type dependency_kind = Parent_dependency | Context_dependency
 
@@ -156,7 +161,9 @@ let dependency_exprs ~loc ~parents ~context =
 
 let gen_bindings meta ~parent_params =
   let loc = meta.loc in
-  let parents = dependency_exprs ~loc ~parents:parent_params ~context:meta.context in
+  let parents =
+    dependency_exprs ~loc ~parents:parent_params ~context:meta.context
+  in
   [
     [%stri let ppx_module_name = lazy [%e estring ~loc meta.name]];
     [%stri
@@ -168,8 +175,7 @@ let gen_bindings meta ~parent_params =
           ~cluster:[%e option_string_expr ~loc meta.cluster]
           ~lexical_path:[%e string_list_expr ~loc meta.lexical_path]
           ~functor_params:[%e string_list_expr ~loc meta.functor_params]
-          ~name:ppx_module_name
-          ~parents:[%e parents]];
+          ~name:ppx_module_name ~parents:[%e parents]];
   ]
 
 let add_generated_bindings meta params_acc items =
@@ -179,16 +185,27 @@ let add_generated_bindings meta params_acc items =
 let inject_into_body meta expr =
   let rec go params_acc e =
     match e.pmod_desc with
-    | Pmod_functor (Named (({txt= Some n; _} as nloc), mt), body) ->
-        {e with pmod_desc= Pmod_functor (Named (nloc, mt), go (params_acc @ [n]) body)}
-    | Pmod_functor (Named (({txt= None; _} as nloc), mt), body) ->
-        {e with pmod_desc= Pmod_functor (Named (nloc, mt), go params_acc body)}
+    | Pmod_functor (Named (({ txt = Some n; _ } as nloc), mt), body) ->
+        {
+          e with
+          pmod_desc =
+            Pmod_functor (Named (nloc, mt), go (params_acc @ [ n ]) body);
+        }
+    | Pmod_functor (Named (({ txt = None; _ } as nloc), mt), body) ->
+        {
+          e with
+          pmod_desc = Pmod_functor (Named (nloc, mt), go params_acc body);
+        }
     | Pmod_functor (Unit, body) ->
-        {e with pmod_desc= Pmod_functor (Unit, go params_acc body)}
+        { e with pmod_desc = Pmod_functor (Unit, go params_acc body) }
     | Pmod_constraint (me, mt) ->
-        {e with pmod_desc= Pmod_constraint (go params_acc me, mt)}
+        { e with pmod_desc = Pmod_constraint (go params_acc me, mt) }
     | Pmod_structure items ->
-        {e with pmod_desc= Pmod_structure (add_generated_bindings meta params_acc items)}
+        {
+          e with
+          pmod_desc =
+            Pmod_structure (add_generated_bindings meta params_acc items);
+        }
     | _ -> e
   in
   go [] expr
@@ -215,24 +232,27 @@ let mapper =
       | None -> super#module_binding mb
       | Some annotation ->
           let meta =
-            module_metadata
-              ~annotation
-              ~context:context_params
-              ~lexical_stack
-              item
-              mb
+            module_metadata ~annotation ~context:context_params ~lexical_stack
+              item mb
           in
           let mb = self#map_nested_modules meta mb in
           let pmb_expr = inject_into_body meta mb.pmb_expr in
           let pmb_attributes = without_attr mb.pmb_attributes in
-          {mb with pmb_expr; pmb_attributes}
+          { mb with pmb_expr; pmb_attributes }
 
     method! structure_item item =
       match item.pstr_desc with
       | Pstr_module mb ->
-          {item with pstr_desc= Pstr_module (self#rewrite_module_binding item mb)}
+          {
+            item with
+            pstr_desc = Pstr_module (self#rewrite_module_binding item mb);
+          }
       | Pstr_recmodule mbs ->
-          {item with pstr_desc= Pstr_recmodule (List.map (self#rewrite_module_binding item) mbs)}
+          {
+            item with
+            pstr_desc =
+              Pstr_recmodule (List.map (self#rewrite_module_binding item) mbs);
+          }
       | _ -> super#structure_item item
   end
 
