@@ -11,12 +11,14 @@ let check_contains ~label ~needle haystack =
   if not (contains ~needle haystack) then
     failwith (Printf.sprintf "%s: expected output to contain %S" label needle)
 
-let dot ?mode root =
+let check_not_contains ~label ~needle haystack =
+  if contains ~needle haystack then
+    failwith (Printf.sprintf "%s: expected output not to contain %S" label needle)
+
+let dot ?mode ?line_numbers root =
   let buffer = Buffer.create 1024 in
   let ppf = Format.formatter_of_buffer buffer in
-  (match mode with
-   | None -> Ppx_module.pp ppf root
-   | Some mode -> Ppx_module.pp ~mode ppf root);
+  Ppx_module.pp ?mode ?line_numbers ppf root;
   Format.pp_print_flush ppf ();
   Buffer.contents buffer
 
@@ -65,6 +67,14 @@ let () =
   check_contains ~label:"source item metadata" ~needle:"Default_name" output;
   check_contains ~label:"cluster metadata" ~needle:"memory" output;
   check_contains ~label:"functor parameter metadata" ~needle:"params: Parent" output;
+  check_contains ~label:"source line metadata" ~needle:"metadata.ml:" output;
+  let no_line_numbers =
+    dot ~line_numbers:false (Lazy.force Outer_instance.Inner.ppx_module_node)
+  in
+  check_contains ~label:"source file metadata without line numbers"
+    ~needle:"metadata.ml" no_line_numbers;
+  check_not_contains ~label:"line numbers disabled" ~needle:"metadata.ml:"
+    no_line_numbers;
   check_contains ~label:"parent edge" ~needle:"label=\"Parent\" style=\"solid\""
     (dot (Lazy.force Parent_instance.ppx_module_node));
   check_contains ~label:"context edge" ~needle:"label=\"Ctx\" style=\"dashed\"" output;

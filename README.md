@@ -111,6 +111,12 @@ Use reachable-only mode when you do not want unrelated registered nodes:
 Format.printf "%a@." (Ppx_module.pp ~mode:Ppx_module.Reachable) root
 ```
 
+Disable source line numbers in node labels when you only want filenames:
+
+```ocaml
+Format.printf "%a@." (Ppx_module.pp ~line_numbers:false) root
+```
+
 ## Module Signatures
 
 If an annotated module has an explicit signature and callers need access to the

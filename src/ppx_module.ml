@@ -158,14 +158,17 @@ let display_instances nodes =
     nodes;
   display
 
-let pp_node ppf ~reachable ~root ~display_instance node =
+let pp_node ppf ~line_numbers ~reachable ~root ~display_instance node =
   let hidden = not (Hashtbl.mem reachable node.id) in
   let source =
-    match node.source_file, node.source_line with
-    | Some file, Some line -> Printf.sprintf "%s:%d" (Filename.basename file) line
-    | Some file, None -> Filename.basename file
-    | None, Some line -> Printf.sprintf "line %d" line
-    | None, None -> ""
+    match node.source_file, node.source_line, line_numbers with
+    | Some file, Some line, true ->
+        Printf.sprintf "%s:%d" (Filename.basename file) line
+    | Some file, Some _, false -> Filename.basename file
+    | Some file, None, _ -> Filename.basename file
+    | None, Some line, true -> Printf.sprintf "line %d" line
+    | None, Some _, false -> ""
+    | None, None, _ -> ""
   in
   let source_item_name = Option.value ~default:"" node.source_item_name in
   let params =
@@ -188,7 +191,7 @@ let pp_node ppf ~reachable ~root ~display_instance node =
     node_id node pp_quoted label pp_quoted style pp_quoted color pp_quoted
     fontcolor penwidth
 
-let rec pp_cluster ppf ~reachable ~root ~display_instances cluster =
+let rec pp_cluster ppf ~line_numbers ~reachable ~root ~display_instances cluster =
   if cluster.path = [] then begin
     List.iter
       (fun node ->
@@ -196,9 +199,9 @@ let rec pp_cluster ppf ~reachable ~root ~display_instances cluster =
           Option.value ~default:node.instance
             (Hashtbl.find_opt display_instances node.id)
         in
-        pp_node ppf ~reachable ~root ~display_instance node)
+        pp_node ppf ~line_numbers ~reachable ~root ~display_instance node)
       (List.sort compare_node cluster.nodes);
-    List.iter (pp_cluster ppf ~reachable ~root ~display_instances)
+    List.iter (pp_cluster ppf ~line_numbers ~reachable ~root ~display_instances)
       (sorted_children cluster)
   end else begin
     Format.fprintf ppf "  subgraph %s {@\n" (cluster_id cluster.path);
@@ -216,9 +219,9 @@ let rec pp_cluster ppf ~reachable ~root ~display_instances cluster =
           Option.value ~default:node.instance
             (Hashtbl.find_opt display_instances node.id)
         in
-        pp_node ppf ~reachable ~root ~display_instance node)
+        pp_node ppf ~line_numbers ~reachable ~root ~display_instance node)
       (List.sort compare_node cluster.nodes);
-    List.iter (pp_cluster ppf ~reachable ~root ~display_instances)
+    List.iter (pp_cluster ppf ~line_numbers ~reachable ~root ~display_instances)
       (sorted_children cluster);
     Format.fprintf ppf "  }@\n"
   end
@@ -264,7 +267,7 @@ let pp_legend ppf ~mode =
     "    legend_context_a -> legend_context_b [label=\"context\" style=\"dashed\"];@\n";
   Format.fprintf ppf "  }@\n"
 
-let pp ?(mode=Full) ppf root =
+let pp ?(mode=Full) ?(line_numbers=true) ppf root =
   force_registered_parents ();
   let reachable = reachable_from root in
   let nodes =
@@ -281,7 +284,7 @@ let pp ?(mode=Full) ppf root =
   Format.fprintf ppf "  graph [compound=true rankdir=TB];@\n";
   Format.fprintf ppf "  node [fontname=\"Helvetica\"];@\n";
   Format.fprintf ppf "  edge [fontname=\"Helvetica\"];@\n";
-  pp_cluster ppf ~reachable ~root ~display_instances cluster_root;
+  pp_cluster ppf ~line_numbers ~reachable ~root ~display_instances cluster_root;
   List.iter
     (fun src ->
       List.iter

@@ -41,7 +41,12 @@ val build_with_metadata :
   parents:(string * edge_kind * node Lazy.t) list ->
   node Lazy.t
 
-val pp : ?mode:pp_mode -> Format.formatter -> node -> unit
+val pp : ?mode:pp_mode -> ?line_numbers:bool -> Format.formatter -> node -> unit
+(** [pp ppf root] prints the graph rooted at [root] as Graphviz DOT.
+
+    [mode] defaults to [Full]. [line_numbers] defaults to [true]; set it to
+    [false] to keep source filenames in node labels while omitting source line
+    numbers. *)
 
 module type LOGGED = sig
   val ppx_module_name : string Lazy.t
