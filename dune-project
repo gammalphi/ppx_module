@@ -2,6 +2,8 @@
 
 (name ppx_module)
 
+(maintainers "Paul Robert <paul.robert@cea.fr>")
+
 (generate_opam_files)
 
 (package
