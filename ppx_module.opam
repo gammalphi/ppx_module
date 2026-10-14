@@ -21,3 +21,6 @@ build: [
     "@doc" {with-doc}
   ]
 ]
+install: [
+  ["dune" "install" "-p" name "--prefix" prefix]
+]
