@@ -1,3 +1,0 @@
-install: [
-  ["dune" "install" "-p" name "--prefix" prefix]
-]

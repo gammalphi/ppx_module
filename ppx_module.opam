@@ -30,6 +30,3 @@ build: [
   ]
 ]
 dev-repo: "git+https://github.com/gammalphi/ppx_module.git"
-install: [
-  ["dune" "install" "-p" name "--prefix" prefix]
-]
