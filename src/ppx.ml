@@ -6,13 +6,15 @@ let attr_name = "ppx_module"
 let unknown_field_error ~loc field =
   Location.raise_errorf ~loc
     "unknown [@@ppx_module] field %S; supported fields are: name, cluster, \
-     parents"
+     parents, dependencies, forward"
     field
 
 type annotation = {
   name : string option;
   cluster : string option;
   parents : bool;
+  dependencies : (string * string) list;
+  forward : string option;
 }
 
 let expr_string = function
@@ -30,6 +32,8 @@ let parse_record_payload fields =
   let name = ref None in
   let cluster = ref None in
   let parents = ref true in
+  let dependencies = ref [] in
+  let forward = ref None in
   let field_name { txt; loc } =
     match txt with
     | Lident field -> field
@@ -55,14 +59,31 @@ let parse_record_payload fields =
     | "name" -> name := Some (parse_string_field ~loc "name" expr)
     | "cluster" -> cluster := Some (parse_string_field ~loc "cluster" expr)
     | "parents" -> parents := parse_bool_field ~loc "parents" expr
+    | "forward" -> forward := Some (parse_string_field ~loc "forward" expr)
+    | "dependencies" ->
+        let rec parse = function
+          | { pexp_desc = Pexp_construct ({txt = Lident "[]"; _}, None); _ } -> []
+          | { pexp_desc = Pexp_construct ({txt = Lident "::"; _},
+              Some {pexp_desc = Pexp_tuple [head; tail]; _}); _ } ->
+              let dep = match head.pexp_desc with
+                | Pexp_tuple [label; path] ->
+                    parse_string_field ~loc "dependencies" label,
+                    parse_string_field ~loc "dependencies" path
+                | _ -> Location.raise_errorf ~loc "dependencies expects (label, module-path) string pairs"
+              in dep :: parse tail
+          | _ -> Location.raise_errorf ~loc "dependencies expects a literal list"
+        in dependencies := parse expr
     | field -> unknown_field_error ~loc field
   in
   List.iter parse_field fields;
-  { name = !name; cluster = !cluster; parents = !parents }
+  if !forward <> None && (!name <> None || !cluster <> None || !dependencies <> []) then
+    Location.raise_errorf ~loc:Location.none "forward cannot be combined with name, cluster or dependencies";
+  { name = !name; cluster = !cluster; parents = !parents;
+    dependencies = !dependencies; forward = !forward }
 
 let parse_annotation attr =
   match attr.attr_payload with
-  | PStr [] -> { name = None; cluster = None; parents = true }
+  | PStr [] -> { name = None; cluster = None; parents = true; dependencies = []; forward = None }
   | PStr
       [
         {
@@ -106,6 +127,8 @@ type metadata = {
   name : string;
   cluster : string option;
   parents : bool;
+  dependencies : (string * string) list;
+  forward : string option;
   lexical_path : string list;
   context : string list;
   functor_params : string list;
@@ -128,6 +151,8 @@ let module_metadata ~(annotation : annotation) ~context ~lexical_stack item mb =
     name;
     cluster = annotation.cluster;
     parents = annotation.parents;
+    dependencies = annotation.dependencies;
+    forward = annotation.forward;
     lexical_path = lexical_stack @ [ name ];
     context;
     functor_params = collect_functor_params mb.pmb_expr;
@@ -140,7 +165,16 @@ let option_string_expr ~loc = function
   | Some s -> [%expr Some [%e estring ~loc s]]
 
 let module_value_expr ~loc module_name value_name =
-  pexp_ident ~loc { txt = Ldot (Lident module_name, value_name); loc }
+  let segments = String.split_on_char '.' module_name in
+  let valid_segment s =
+    String.length s > 0 && s.[0] >= 'A' && s.[0] <= 'Z'
+    && String.for_all (function
+      | 'A'..'Z' | 'a'..'z' | '0'..'9' | '_' | '\'' -> true
+      | _ -> false) s
+  in
+  if not (List.for_all valid_segment segments) then
+    Location.raise_errorf ~loc "invalid module path %S in ppx_module" module_name;
+  pexp_ident ~loc { txt = Ldot (Longident.parse module_name, value_name); loc }
 
 type dependency_kind = Parent_dependency | Context_dependency
 
@@ -162,8 +196,18 @@ let dependency_exprs ~loc ~parents ~context =
 let gen_bindings meta ~parent_params =
   let loc = meta.loc in
   let parents =
-    dependency_exprs ~loc ~parents:parent_params ~context:meta.context
+    let explicit = List.map (fun (label, path) ->
+      let node = module_value_expr ~loc path "ppx_module_node" in
+      [%expr [%e estring ~loc label], Ppx_module.Parent, [%e node]]) meta.dependencies in
+    let automatic = List.map (dependency_expr ~loc Parent_dependency) parent_params
+      @ List.map (dependency_expr ~loc Context_dependency) meta.context in
+    elist ~loc (automatic @ explicit)
   in
+  match meta.forward with
+  | Some path ->
+      [ [%stri let ppx_module_name = [%e module_value_expr ~loc path "ppx_module_name"]];
+        [%stri let ppx_module_node = [%e module_value_expr ~loc path "ppx_module_node"]] ]
+  | None ->
   [
     [%stri let ppx_module_name = lazy [%e estring ~loc meta.name]];
     [%stri
@@ -239,6 +283,27 @@ let mapper =
           let pmb_expr = inject_into_body meta mb.pmb_expr in
           let pmb_attributes = without_attr mb.pmb_attributes in
           { mb with pmb_expr; pmb_attributes }
+
+    method! structure items =
+      let attrs = List.filter_map (fun item -> match item.pstr_desc with
+        | Pstr_attribute attr when attr.attr_name.txt = attr_name -> Some (item, attr)
+        | _ -> None) items in
+      match attrs with
+      | [] -> super#structure items
+      | [(item, attr)] ->
+          let annotation = parse_annotation attr in
+          let body = List.filter (fun item -> match item.pstr_desc with
+            | Pstr_attribute attr -> attr.attr_name.txt <> attr_name
+            | _ -> true) items in
+          let loc = item.pstr_loc in
+          let mb = module_binding ~loc ~name:{txt = Some "File"; loc}
+            ~expr:(pmod_structure ~loc []) in
+          let meta = module_metadata ~annotation ~context:context_params
+            ~lexical_stack item mb in
+          let body = super#structure body in
+          add_generated_bindings meta [] body
+      | _ -> Location.raise_errorf ~loc:(fst (List.hd attrs)).pstr_loc
+          "duplicate floating ppx_module annotations"
 
     method! structure_item item =
       match item.pstr_desc with

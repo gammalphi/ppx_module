@@ -1,167 +1,169 @@
 # ppx_module
 
-`ppx_module` is an OCaml PPX and small runtime library for recording module
-instantiation graphs.
+A PPX and runtime library that records how modules and functor applications
+depend on each other, and prints the result as Graphviz DOT.
 
-It is meant for codebases that use module functors heavily and need a way to
-inspect which instantiated module depends on which functor argument or captured
-outer context. The generated graph can be printed as Graphviz DOT.
+Each annotated module or functor application becomes a node. Edges are the
+dependencies you declare or the functor parameters the PPX finds. This is not
+a whole-program dependency analysis.
 
-## What It Does
+## Setup
 
-Annotate a module binding with `[@@ppx_module]`:
+```lisp
+(library
+ (name domains)
+ (libraries ppx_module)
+ (preprocess (pps ppx_module.ppx)))
+```
+
+## Annotations
+
+A module binding:
 
 ```ocaml
-module Domain = struct
-  let value = 1
+module Interval = struct
+  let bottom = None
 end
-[@@ppx_module]
+[@@ppx_module { name = "Interval"; cluster = "scalar" }]
 ```
 
-The PPX appends two values to the module body:
+A whole structure, e.g. a compilation unit, with a floating attribute:
 
 ```ocaml
-val ppx_module_name : string Lazy.t
-val ppx_module_node : Ppx_module.node Lazy.t
+[@@@ppx_module { name = "Interval"; cluster = "scalar" }]
+
+let bottom = None
 ```
 
-At runtime, forcing `ppx_module_node` registers a node in the module graph.
-`Ppx_module.pp` can then print the graph rooted at that node.
+The generated bindings go at the end of the structure, wherever the attribute
+is placed, so a later `include` cannot shadow them. At most one floating
+annotation is allowed per structure.
 
-## Attributes
-
-The attribute can be bare:
-
-```ocaml
-[@@ppx_module]
-```
-
-or can take a record payload:
+Both forms generate the members of `Ppx_module.LOGGED`. Signatures that need to
+expose them must include it themselves:
 
 ```ocaml
-[@@ppx_module { name = "Memory.Domain"; cluster = "memory"; parents = true }]
-```
-
-Supported fields:
-
-- `name`: display name for the graph node. If omitted, the capitalized source
-  filename is used.
-- `cluster`: optional Graphviz cluster name. Some names have predefined colors:
-  `memory`, `scalar`, `address`, `offset`, `value`, `wrapper`, and `checks`.
-- `parents`: whether functor parameters should be recorded as parent
-  dependencies. Defaults to `true`.
-
-## Functor Dependencies
-
-For an annotated functor, named functor parameters are recorded as `Parent`
-edges:
-
-```ocaml
-module Make (Input : Ppx_module.LOGGED) : sig
+module type DOMAIN = sig
   include Ppx_module.LOGGED
-end = struct
+  val bottom : int option
 end
-[@@ppx_module { name = "Make" }]
 ```
 
-The generated node for `Make(Input)` will point to `Input.ppx_module_node`.
+## Fields
 
-Nested annotated modules inside an annotated functor also record outer functor
-parameters as `Context` edges:
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | source filename, capitalized | Node label. |
+| `cluster` | none | Graph cluster. |
+| `parents` | `true` | Add edges to the named functor parameters. |
+| `dependencies` | `[]` | Extra edges, as `(label, module path)` pairs. |
+| `forward` | none | Reuse another module's node instead of creating one. |
+
+All values are literals. Unknown fields are an error. The clusters `memory`,
+`scalar`, `address`, `offset`, `value`, `wrapper` and `checks` have predefined
+colors.
+
+## Dependencies
+
+### Functor parameters
+
+By default, an annotated functor gets an edge to each named parameter:
 
 ```ocaml
-module Outer (Ctx : Ppx_module.LOGGED) = struct
-  module Inner = struct
-  end
+module Make (Base : Ppx_module.LOGGED) = struct
+  ...
+end
+[@@ppx_module { name = "Domain" }]
+```
+
+Every named parameter must then expose `Ppx_module.LOGGED`. Anonymous and unit
+parameters are skipped. Floating annotations do not collect functor parameters.
+
+### Explicit edges
+
+```ocaml
+module Combined = struct
+  ...
+end
+[@@ppx_module {
+  name = "Combined";
+  dependencies = [("Numeric", "Numeric"); ("Enum", "Basis.Enum")];
+}]
+```
+
+Paths can be dotted but cannot be functor applications. Each target must expose
+`Ppx_module.LOGGED` and be in scope at the end of the structure. These edges
+are added to the automatic ones.
+
+To link only some parameters, turn off the automatic edges and list the ones
+you want:
+
+```ocaml
+module Make (Base : Ppx_module.LOGGED) (Config : sig end) = struct
+  ...
+end
+[@@ppx_module { parents = false; dependencies = [("Base", "Base")] }]
+```
+
+### Context edges
+
+A module annotated inside an annotated functor gets a `Context` edge to each of
+the outer functor's named parameters:
+
+```ocaml
+module Outer (Base : Ppx_module.LOGGED) = struct
+  module Inner = struct end
   [@@ppx_module { name = "Inner" }]
 end
 [@@ppx_module { name = "Outer" }]
 ```
 
-Here, `Inner` records that it captured `Ctx` from its enclosing context.
+These edges come from scope, not from actual use. `parents = false` does not
+remove them.
 
-## Printing A Graph
+## Forwarding
 
-Force a generated node, then pass it to `Ppx_module.pp`:
+Wrappers such as logging layers can reuse the wrapped module's node:
+
+```ocaml
+module Wrap (Sub : Ppx_module.LOGGED) = struct
+  ...
+  [@@@ppx_module { forward = "Sub" }]
+end
+```
+
+`Wrap(Sub)` then has the same node as `Sub`. `forward` cannot be combined with
+`name`, `cluster` or `dependencies`, and `parents` is ignored.
+
+## Printing
 
 ```ocaml
 let () =
-  let root = Lazy.force My_module.ppx_module_node in
-  Format.printf "%a@." Ppx_module.pp root
+  let root = Lazy.force Domain.ppx_module_node in
+  Ppx_module.pp ~mode:Ppx_module.Reachable ~line_numbers:false
+    Format.std_formatter root;
+  Format.pp_print_flush Format.std_formatter ()
 ```
-
-The output is Graphviz DOT:
-
-```dot
-digraph module_stack {
-  ...
-}
-```
-
-To render it:
 
 ```sh
-dune exec ./my_program.exe > graph.dot
-dot -Tsvg graph.dot > graph.svg
+dune exec ./main.exe > stack.dot
+dot -Tsvg stack.dot -o stack.svg
 ```
 
-Use reachable-only mode when you do not want unrelated registered nodes:
+- `mode`: `Full` (default) prints every registered node and grays out the ones
+  not reachable from the root. `Reachable` prints only the reachable ones.
+- `line_numbers`: defaults to `true`.
 
-```ocaml
-Format.printf "%a@." (Ppx_module.pp ~mode:Ppx_module.Reachable) root
-```
+Edges go from a module to its dependencies. Parameter edges are solid and
+context edges are dashed.
 
-Disable source line numbers in node labels when you only want filenames:
-
-```ocaml
-Format.printf "%a@." (Ppx_module.pp ~line_numbers:false) root
-```
-
-## Module Signatures
-
-If an annotated module has an explicit signature and callers need access to the
-generated values, include `Ppx_module.LOGGED`:
-
-```ocaml
-module M : sig
-  include Ppx_module.LOGGED
-
-  val value : int
-end = struct
-  let value = 1
-end
-[@@ppx_module { name = "M" }]
-```
-
-## Dune Setup
-
-Depend on the runtime library and enable the PPX:
-
-```lisp
-(executable
- (name main)
- (libraries ppx_module)
- (preprocess
-  (pps ppx_module.ppx)))
-```
-
-For libraries:
-
-```lisp
-(library
- (name my_lib)
- (libraries ppx_module)
- (preprocess
-  (pps ppx_module.ppx)))
-```
+A node is registered when its module is initialized or its functor applied,
+not when the lazy value is forced. `Full` mode can therefore show
+instantiated alternatives that end up unused.
 
 ## Development
 
-Build and run the tests with:
-
 ```sh
+dune build
 dune runtest
 ```
-
-The tests cover recursive modules, default and explicit names, clusters, functor
-parameter edges, disabled parent edges, context edges, and DOT output fragments.

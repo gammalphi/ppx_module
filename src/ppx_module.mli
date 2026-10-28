@@ -14,6 +14,14 @@
       [@@ppx_module { parents = false }]
     ]}
 
+    Floating [@@@ppx_module] annotations apply to the enclosing structure,
+    including compilation units. Generated bindings are appended after includes.
+
+    [dependencies = ["label", "Module.Path"]] adds explicit labelled parent
+    edges; [parents = false] disables automatic functor-parameter edges.
+    [forward = "Module.Path"] forwards that module's graph identity instead of
+    allocating a node, and is incompatible with name, cluster and dependencies.
+
     If [name] is omitted, the graph name is derived from the source filename:
     the basename is taken, the extension is removed, and the first character is
     capitalized with [String.capitalize_ascii]. For example,
