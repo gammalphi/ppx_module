@@ -69,13 +69,15 @@ let () =
   check_contains ~label:"cluster metadata" ~needle:"memory" output;
   check_contains ~label:"functor signature" ~needle:"Parent_functor(Parent)" output;
   check_not_contains ~label:"no separate parameter line" ~needle:"params:" output;
-  check_contains ~label:"source line metadata" ~needle:"metadata.ml:" output;
+  check_contains ~label:"source line metadata" ~needle:"metadata.ml (line " output;
+  check_contains ~label:"source styling"
+    ~needle:"<FONT COLOR=\"gray50\" POINT-SIZE=\"10\">metadata.ml" output;
   let no_line_numbers =
     dot ~line_numbers:false (Lazy.force Outer_instance.Inner.ppx_module_node)
   in
   check_contains ~label:"source file metadata without line numbers"
     ~needle:"metadata.ml" no_line_numbers;
-  check_not_contains ~label:"line numbers disabled" ~needle:"metadata.ml:"
+  check_not_contains ~label:"line numbers disabled" ~needle:"metadata.ml (line "
     no_line_numbers;
   check_contains ~label:"parent edge" ~needle:"label=\"Parent\" style=\"solid\""
     (dot (Lazy.force Parent_instance.ppx_module_node));
@@ -89,9 +91,19 @@ let () =
     Lazy.force (Ppx_module.build ~name:(lazy "Explicit.Name") ~parents:[])
   in
   let duplicates = dot duplicate in
-  check_contains ~label:"first repeated instance" ~needle:"Explicit.Name\\n#1"
+  check_contains ~label:"first repeated instance" ~needle:"Explicit.Name<BR/>#1"
     duplicates;
-  check_contains ~label:"second repeated instance" ~needle:"Explicit.Name\\n#2"
+  check_contains ~label:"second repeated instance" ~needle:"Explicit.Name<BR/>#2"
     duplicates;
   check_not_contains ~label:"unique reachable instance has no tag" ~needle:"#1"
-    (dot ~mode:Ppx_module.Reachable duplicate)
+    (dot ~mode:Ppx_module.Reachable duplicate);
+  let special =
+    Lazy.force
+      (Ppx_module.build_with_metadata ~source_file:"a&b.ml" ~source_line:42
+         ~source_item_name:"Make" ~cluster:None ~lexical_path:[]
+         ~functor_params:["Arg"] ~name:(lazy "A<B>") ~parents:[])
+  in
+  let escaped = dot ~mode:Ppx_module.Reachable special in
+  check_contains ~label:"escaped module name" ~needle:"A&lt;B&gt;" escaped;
+  check_contains ~label:"escaped source and line"
+    ~needle:"a&amp;b.ml (line 42)" escaped

@@ -1,5 +1,5 @@
 (executables
- (names recursive_modules metadata declarative)
+ (names recursive_modules metadata declarative clusters)
  (libraries ppx_module)
  (preprocess
   (pps ppx_module.ppx)))
@@ -10,4 +10,5 @@
   (progn
    (run ./recursive_modules.exe)
    (run ./metadata.exe)
-   (run ./declarative.exe))))
+   (run ./declarative.exe)
+   (run ./clusters.exe))))

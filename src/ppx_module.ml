@@ -55,6 +55,19 @@ let escape_dot s =
 
 let pp_quoted ppf s = Format.fprintf ppf "\"%s\"" (escape_dot s)
 
+let escape_html s =
+  let b = Buffer.create (String.length s) in
+  String.iter
+    (function
+      | '&' -> Buffer.add_string b "&amp;"
+      | '<' -> Buffer.add_string b "&lt;"
+      | '>' -> Buffer.add_string b "&gt;"
+      | '"' -> Buffer.add_string b "&quot;"
+      | '\n' -> Buffer.add_string b "<BR/>"
+      | c -> Buffer.add_char b c)
+    s;
+  Buffer.contents b
+
 let node_id ppf n = Format.fprintf ppf "n%d" n.id
 
 let cluster_id path =
@@ -160,7 +173,7 @@ let pp_node ppf ~line_numbers ~reachable ~root ~display_instance node =
   let source =
     match node.source_file, node.source_line, line_numbers with
     | Some file, Some line, true ->
-        Printf.sprintf "%s:%d" (Filename.basename file) line
+        Printf.sprintf "%s (line %d)" (Filename.basename file) line
     | Some file, Some _, false -> Filename.basename file
     | Some file, None, _ -> Filename.basename file
     | None, Some line, true -> Printf.sprintf "line %d" line
@@ -177,22 +190,36 @@ let pp_node ppf ~line_numbers ~reachable ~root ~display_instance node =
     [ (match display_instance with
        | None -> ""
        | Some instance -> Printf.sprintf "#%d" instance);
-      module_signature; source ]
+      module_signature ]
     |> List.filter ((<>) "")
-    |> String.concat "\n"
   in
-  let label = if details = "" then node.name else node.name ^ "\n" ^ details in
+  let label =
+    List.map escape_html (node.name :: details) |> String.concat "<BR/>"
+  in
+  let label =
+    if source = "" then label
+    else
+      label ^ "<BR/><FONT COLOR=\"gray50\" POINT-SIZE=\"10\">"
+      ^ escape_html source ^ "</FONT>"
+  in
   let color = if hidden then "gray55" else "black" in
   let fontcolor = if hidden then "gray35" else "black" in
   let style = if hidden then "dashed,rounded" else "rounded" in
   let penwidth = if node.id = root.id then "2.2" else "1" in
   Format.fprintf ppf
-    "  %a [label=%a shape=box style=%a color=%a fontcolor=%a penwidth=%s];@\n"
-    node_id node pp_quoted label pp_quoted style pp_quoted color pp_quoted
+    "  %a [label=<%s> shape=box style=%a color=%a fontcolor=%a penwidth=%s];@\n"
+    node_id node label pp_quoted style pp_quoted color pp_quoted
     fontcolor penwidth
 
+let rec cluster_node_count cluster =
+  Hashtbl.fold
+    (fun _ child count -> count + cluster_node_count child)
+    cluster.children (List.length cluster.nodes)
+
 let rec pp_cluster ppf ~line_numbers ~reachable ~root ~display_instances cluster =
-  if cluster.path = [] then begin
+  if cluster.path = []
+     || (cluster.cluster_name = None && cluster_node_count cluster = 1)
+  then begin
     List.iter
       (fun node ->
         let display_instance =
