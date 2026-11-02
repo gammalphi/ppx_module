@@ -62,11 +62,13 @@ let () =
   let _ = Lazy.force Outer_instance.ppx_module_node in
   let _ = Lazy.force Outer_instance.Inner.ppx_module_node in
   let output = dot (Lazy.force Outer_instance.Inner.ppx_module_node) in
+  check_not_contains ~label:"unique instances have no tag" ~needle:"#1" output;
   check_contains ~label:"default module name" ~needle:"Metadata" output;
   check_contains ~label:"explicit module name" ~needle:"Explicit.Name" output;
   check_contains ~label:"source item metadata" ~needle:"Default_name" output;
   check_contains ~label:"cluster metadata" ~needle:"memory" output;
-  check_contains ~label:"functor parameter metadata" ~needle:"params: Parent" output;
+  check_contains ~label:"functor signature" ~needle:"Parent_functor(Parent)" output;
+  check_not_contains ~label:"no separate parameter line" ~needle:"params:" output;
   check_contains ~label:"source line metadata" ~needle:"metadata.ml:" output;
   let no_line_numbers =
     dot ~line_numbers:false (Lazy.force Outer_instance.Inner.ppx_module_node)
@@ -82,4 +84,14 @@ let () =
     contains ~needle:"label=\"Parent\" style=\"solid\""
       (dot ~mode:Ppx_module.Reachable
          (Lazy.force No_parent_instance.ppx_module_node))
-  then failwith "parents=false: unexpected parent dependency edge"
+  then failwith "parents=false: unexpected parent dependency edge";
+  let duplicate =
+    Lazy.force (Ppx_module.build ~name:(lazy "Explicit.Name") ~parents:[])
+  in
+  let duplicates = dot duplicate in
+  check_contains ~label:"first repeated instance" ~needle:"Explicit.Name\\n#1"
+    duplicates;
+  check_contains ~label:"second repeated instance" ~needle:"Explicit.Name\\n#2"
+    duplicates;
+  check_not_contains ~label:"unique reachable instance has no tag" ~needle:"#1"
+    (dot ~mode:Ppx_module.Reachable duplicate)

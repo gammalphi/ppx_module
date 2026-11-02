@@ -12,7 +12,6 @@ type node = {
   cluster: string option;
   lexical_path: string list;
   functor_params: string list;
-  instance: int;
 }
 
 let fresh =
@@ -20,21 +19,15 @@ let fresh =
   fun () -> incr x; !x
 
 let registry : node list ref = ref []
-let instances : (string, int) Hashtbl.t = Hashtbl.create 17
 
 let build_node ~source_file ~source_line ~source_item_name ~cluster ~lexical_path
     ~functor_params ~name ~parents =
   Lazy.from_val @@
   let id = fresh () in
   let name = Lazy.force name in
-  let instance =
-    let next = 1 + Option.value ~default:0 (Hashtbl.find_opt instances name) in
-    Hashtbl.replace instances name next;
-    next
-  in
   let node =
     { id; name; parents; source_file; source_line; source_item_name; cluster;
-      lexical_path; functor_params; instance }
+      lexical_path; functor_params }
   in
   registry := node :: !registry;
   node
@@ -156,6 +149,10 @@ let display_instances nodes =
       Hashtbl.replace counts node.name next;
       Hashtbl.add display node.id next)
     nodes;
+  List.iter
+    (fun node ->
+      if Hashtbl.find counts node.name = 1 then Hashtbl.remove display node.id)
+    nodes;
   display
 
 let pp_node ppf ~line_numbers ~reachable ~root ~display_instance node =
@@ -171,13 +168,16 @@ let pp_node ppf ~line_numbers ~reachable ~root ~display_instance node =
     | None, None, _ -> ""
   in
   let source_item_name = Option.value ~default:"" node.source_item_name in
-  let params =
+  let module_signature =
     match node.functor_params with
-    | [] -> ""
-    | params -> "params: " ^ String.concat ", " params
+    | [] -> source_item_name
+    | params -> source_item_name ^ "(" ^ String.concat ", " params ^ ")"
   in
   let details =
-    [ Printf.sprintf "#%d" display_instance; source_item_name; params; source ]
+    [ (match display_instance with
+       | None -> ""
+       | Some instance -> Printf.sprintf "#%d" instance);
+      module_signature; source ]
     |> List.filter ((<>) "")
     |> String.concat "\n"
   in
@@ -196,8 +196,7 @@ let rec pp_cluster ppf ~line_numbers ~reachable ~root ~display_instances cluster
     List.iter
       (fun node ->
         let display_instance =
-          Option.value ~default:node.instance
-            (Hashtbl.find_opt display_instances node.id)
+          Hashtbl.find_opt display_instances node.id
         in
         pp_node ppf ~line_numbers ~reachable ~root ~display_instance node)
       (List.sort compare_node cluster.nodes);
@@ -216,8 +215,7 @@ let rec pp_cluster ppf ~line_numbers ~reachable ~root ~display_instances cluster
     List.iter
       (fun node ->
         let display_instance =
-          Option.value ~default:node.instance
-            (Hashtbl.find_opt display_instances node.id)
+          Hashtbl.find_opt display_instances node.id
         in
         pp_node ppf ~line_numbers ~reachable ~root ~display_instance node)
       (List.sort compare_node cluster.nodes);
