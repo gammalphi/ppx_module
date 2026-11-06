@@ -173,9 +173,9 @@ let pp_node ppf ~line_numbers ~reachable ~root ~display_instance node =
   let source =
     match node.source_file, node.source_line, line_numbers with
     | Some file, Some line, true ->
-        Printf.sprintf "%s (line %d)" (Filename.basename file) line
-    | Some file, Some _, false -> Filename.basename file
-    | Some file, None, _ -> Filename.basename file
+        Printf.sprintf "%s (line %d)" file line
+    | Some file, Some _, false -> file
+    | Some file, None, _ -> file
     | None, Some line, true -> Printf.sprintf "line %d" line
     | None, Some _, false -> ""
     | None, None, _ -> ""
@@ -183,7 +183,7 @@ let pp_node ppf ~line_numbers ~reachable ~root ~display_instance node =
   let source_item_name = Option.value ~default:"" node.source_item_name in
   let module_signature =
     match node.functor_params with
-    | [] -> source_item_name
+    | [] -> ""
     | params -> source_item_name ^ "(" ^ String.concat ", " params ^ ")"
   in
   let details =

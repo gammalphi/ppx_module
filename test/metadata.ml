@@ -65,13 +65,14 @@ let () =
   check_not_contains ~label:"unique instances have no tag" ~needle:"#1" output;
   check_contains ~label:"default module name" ~needle:"Metadata" output;
   check_contains ~label:"explicit module name" ~needle:"Explicit.Name" output;
-  check_contains ~label:"source item metadata" ~needle:"Default_name" output;
+  check_not_contains ~label:"non-functor source item omitted"
+    ~needle:"<BR/>Default_name<BR/>" output;
   check_contains ~label:"cluster metadata" ~needle:"memory" output;
   check_contains ~label:"functor signature" ~needle:"Parent_functor(Parent)" output;
   check_not_contains ~label:"no separate parameter line" ~needle:"params:" output;
   check_contains ~label:"source line metadata" ~needle:"metadata.ml (line " output;
   check_contains ~label:"source styling"
-    ~needle:"<FONT COLOR=\"gray50\" POINT-SIZE=\"10\">metadata.ml" output;
+    ~needle:"<FONT COLOR=\"gray50\" POINT-SIZE=\"10\">" output;
   let no_line_numbers =
     dot ~line_numbers:false (Lazy.force Outer_instance.Inner.ppx_module_node)
   in
@@ -106,4 +107,18 @@ let () =
   let escaped = dot ~mode:Ppx_module.Reachable special in
   check_contains ~label:"escaped module name" ~needle:"A&lt;B&gt;" escaped;
   check_contains ~label:"escaped source and line"
-    ~needle:"a&amp;b.ml (line 42)" escaped
+    ~needle:"a&amp;b.ml (line 42)" escaped;
+  let file =
+    Lazy.force
+      (Ppx_module.build_with_metadata
+         ~source_file:"single_value_abstraction/sva_quadrivalent.ml"
+         ~source_line:1 ~source_item_name:"File" ~cluster:None ~lexical_path:[]
+         ~functor_params:[] ~name:(lazy "Sva_quadrivalent") ~parents:[])
+  in
+  let file_output = dot ~mode:Ppx_module.Reachable ~line_numbers:false file in
+  check_contains ~label:"file module label without synthetic item"
+    ~needle:"Sva_quadrivalent<BR/><FONT" file_output;
+  check_not_contains ~label:"synthetic File omitted" ~needle:"<BR/>File<BR/>"
+    file_output;
+  check_contains ~label:"source directory retained"
+    ~needle:"single_value_abstraction/sva_quadrivalent.ml" file_output
